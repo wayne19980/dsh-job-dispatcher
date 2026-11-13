@@ -1,0 +1,45 @@
+{
+  "name": "dsh-job-dispatcher",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A read-only dispatcher agent preset for DeepSeek Harness: dispatch jobs to background workers and watch them on a live Web board.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wayne19980/dsh-job-dispatcher.git"
+  },
+  "engines": {
+    "dsh": ">=0.2.1-alpha.4 <0.3.0"
+  },
+  "icon": "./icon.svg",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./tool": "./tool.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./tool/locale/*.json": "./tool-locale/*.json",
+    "./tool/icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "tool.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "tool-locale/*.json",
+    "icon.svg",
+    "README.md"
+  ],
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
+    }
+  }
+}

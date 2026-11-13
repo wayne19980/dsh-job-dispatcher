@@ -1,0 +1,82 @@
+# Job dispatcher bundle: the Host board/route row, the dispatcher agent
+# preset, and the preset-scoped dispatch tools.
+- insert:
+    - id: dispatcher-host
+      name: dsh-job-dispatcher
+
+    - id: preset-dispatcher
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: dispatcher
+        name: 调度台 Job Dispatcher
+        description: >-
+          只读调度预设：主对话只负责理解需求、派发后台 worker 和回报结果，
+          自己不写代码、不跑长任务；Web 端提供实时调度看板。
+        order: 0
+        plugins:
+          - id: persona
+            name: '@deepseek-ai/dsh-persona'
+            config:
+              prefix: |
+                你是「调度台」，一个只负责调度、不亲自执行的主对话智能体。用户会连续给你多个互不相关的需求；你的价值是让他们不用等。
+
+                ## 铁律
+                1. 不自己干活：你的工具里没有 write/edit/bash，也不应该试图绕过。任何实现、调查、验证都通过 `dispatch` 派给后台 worker。
+                2. 不阻塞：每条用户需求在一轮内完成「理解 → 派发 → 回执」三步就结束本轮。禁止等待 worker：不要调用 `wait_agent`，不要给 `job_output` 传 wait，不要反复轮询 `dispatcher_board`。worker 完成后运行时会把完成通知送进本会话并唤醒你，你再汇报。
+                3. 必回报：worker 完成通知到达时，用简短格式向用户汇报：做了什么、证据（命令/文件/行号）、结论、风险、下一步；如果有后续工作，继续派发或询问。
+
+                ## 工作方式
+                - 信息足够就立刻派发；信息不足时只问一个最关键的问题（`ask_user_question`），不要猜。
+                - `dispatch` 的 brief 必须自包含：背景、目标、精确范围（文件/模块/接口）、验收标准与验证命令、项目约束与约定（如 AGENTS.md）、是否可并行、完成后回报格式。worker 看不到本对话，只能看到 brief。
+                - 一条消息里有多个互相独立的任务/模块，就拆成多个 dispatch 并行派发；共享文件或有先后依赖的，串行（下一个在下一轮再派）。
+                - 用户中途修改正在做的任务时，用 `send_message` 把补充要求发给对应 worker（它会在下一个 step 边界收到），不要打断整个调度。
+                - 回执格式：每行一个 `已派发 <dispatchId> → <一句话任务>`，然后结束本轮。没有新需求时不要空转。
+                - 你可以用只读工具（read/glob/grep）把需求写成可执行的 brief，但最多 1–3 次轻量读取；不要替 worker 把调查做完。
+                - 不承诺没有验证过的结果；worker 报告失败就如实转达，并给出重派或调整方案。
+
+                ## 边界
+                - 只读：不要修改工作区文件，不要执行构建、测试或部署。
+                - 不要自己「先做着看看」：那会重新阻塞用户的队列，正是这个预设要避免的。
+                - 派发时优先声明 write_scopes，便于识别并行任务的文件冲突。
+          - id: agent-instructions
+            name: '@deepseek-ai/dsh-agent-instructions'
+            config:
+              maxBytes: 65536
+          - id: time-context
+            name: '@deepseek-ai/dsh-time-context'
+          - id: tool-fs
+            name: '@deepseek-ai/dsh-tool-fs'
+            config:
+              read: true
+              readImage: false
+              write: false
+              edit: false
+          - id: tool-fs-search
+            name: '@deepseek-ai/dsh-tool-fs-search'
+            config:
+              sampleOverCapGlobResults: false
+          - id: dispatch-tool
+            name: dsh-job-dispatcher/tool
+          - id: dispatch-control
+            name: '@deepseek-ai/dsh-tool-subagent-control'
+          - id: dispatch-list-agents
+            name: '@deepseek-ai/dsh-tool-subagent-control/list-agents'
+          - id: tool-ask-user
+            name: '@deepseek-ai/dsh-tool-ask-user'
+          - id: compaction
+            name: cordis:group
+            group: true
+            isolate:
+              compaction: true
+              toolResultPruner: true
+            config:
+              - id: compaction-basic
+                name: '@deepseek-ai/dsh-compaction-basic'
+              - id: command-compact
+                name: '@deepseek-ai/dsh-command-compact'
+              - id: tool-result-pruner
+                name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
+                config:
+                  thresholdChars: 8192
+                  headChars: 4096
+                  tailChars: 1024

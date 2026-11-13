@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Dispatcher",
+    "description": "Read-only dispatcher preset: the main conversation only triages requests, dispatches background workers, and reports results; a live dispatch board shows worker status."
+  }
+}
