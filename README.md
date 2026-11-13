@@ -113,6 +113,10 @@ dsh plugin --profile web add file:/abs/path/to/dsh-job-dispatcher
 - **改包名时要同步三处**：`package.json` 的 `name`、`client.js` 里 `window.__ModuleLoader__.load({ id })`、`cordis.patch.yml` 里 preset 对 `<name>/tool` 的引用。
 - 同一 profile 不要同时安装两个声明相同 preset id（`dispatcher`）的 bundle，否则后加载的声明会失败。
 
+## 实战反馈与路线图
+
+- 2026-11-13 的一次真实使用总结（脱敏）：[docs/field-notes/2026-11-13.md](docs/field-notes/2026-11-13.md)，含 P0/P1/P2 需求与 v1.1–v1.3 路线图。
+
 ## 许可证
 
 当前仓库未附开源许可证（`private: true`，仅供学习/内部试用）。如需对外分发或发布 npm，请补充 `LICENSE` 并自行去掉 `private`。
