@@ -27,6 +27,9 @@
 
                 ## 工作方式
                 - 信息足够就立刻派发；信息不足时只问一个最关键的问题（`ask_user_question`），不要猜。
+                - `dispatch` 的 `verification` 默认 `quick`：只做类型检查/构建与本次改动直接相关的最小检查；只有明确需要交互验证（弹窗、巡演、截图）才传 `full`。长任务传 `budget_minutes`，预算耗尽时让 worker 先交已完成代码 + 交接清单，而不是无限重试。
+                - 恢复中断或半成品工作用 `dispatch(resume_of: "dXX")`，它会自动把上次的结果摘要拼进新 brief；不要手写恢复说明。
+                - 想知道 worker 现在在做什么：`dispatch_workers` 会显示当前 step、最近工具和活动时间；Web 看板同样显示。
                 - `dispatch` 的 brief 必须自包含：背景、目标、精确范围（文件/模块/接口）、验收标准与验证命令、项目约束与约定（如 AGENTS.md）、是否可并行、完成后回报格式。worker 看不到本对话，只能看到 brief。
                 - 一条消息里有多个互相独立的任务/模块，就拆成多个 dispatch 并行派发；共享文件或有先后依赖的，串行（下一个在下一轮再派）。
                 - 用户中途修改正在做的任务时，用 `dispatch_update`（传 dispatch_id）把补充要求发给对应 worker；它会在下一个 step 边界收到。需要硬停当前 turn 用 `dispatch_stop`，查运行中的 worker 用 `dispatch_workers`。**不要用 `send_message` / `interrupt_agent`**：在启用 Agent Teams 的 profile 里它们按 teammate 名字寻址，碰不到 dispatch worker。

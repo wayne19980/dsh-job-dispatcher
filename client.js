@@ -23,6 +23,9 @@ window.__ModuleLoader__.load({
       'board.stopped': '已停止',
       'board.pending': '排队中',
       'board.unknown': '状态未知',
+      'board.step': '步',
+      'board.budget': '预算',
+      'board.verification': '验收',
       'board.scope': '写域',
       'board.worker': 'worker',
       'board.empty': '暂无调度',
@@ -43,6 +46,9 @@ window.__ModuleLoader__.load({
       'board.stopped': 'stopped',
       'board.pending': 'queued',
       'board.unknown': 'unknown',
+      'board.step': 'step',
+      'board.budget': 'budget',
+      'board.verification': 'verification',
       'board.scope': 'scope',
       'board.worker': 'worker',
       'board.empty': 'No dispatches yet',
@@ -74,6 +80,30 @@ window.__ModuleLoader__.load({
       if (ms < 60000) return `${Math.max(1, Math.round(ms / 1000))}s`
       if (ms < 3600000) return `${Math.round(ms / 60000)}m`
       return `${(ms / 3600000).toFixed(1)}h`
+    }
+
+    /** One-line meta: id, status, elapsed/budget, current step and last tool. */
+    function entryMeta(t, entry, now = Date.now()) {
+      const parts = [`#${entry.id}`, statusLabel(t, entry.status)]
+      const active = entry.status === 'running' || entry.status === 'pending'
+      if (active) {
+        const spent = duration(now - entry.createdAt)
+        parts.push(typeof entry.budgetMinutes === 'number' ? `${spent}/${entry.budgetMinutes}m` : spent)
+      }
+      const progress = entry.progress && typeof entry.progress === 'object' ? entry.progress : null
+      if (progress !== null) {
+        if (typeof progress.step === 'number') parts.push(`${t('board.step')} ${progress.step}`)
+        if (typeof progress.lastTool === 'string' && progress.lastTool.length > 0) {
+          const at = typeof progress.lastToolAt === 'number' ? progress.lastToolAt : progress.lastActivityAt
+          parts.push(`${progress.lastTool}${typeof at === 'number' ? ` · ${duration(now - at)}` : ''}`)
+        }
+      }
+      return parts.join(' · ')
+    }
+
+    /** Whether a running dispatch has exceeded its declared time budget. */
+    function overBudget(entry, now = Date.now()) {
+      return entry.status === 'running' && typeof entry.budgetMinutes === 'number' && now - entry.createdAt > entry.budgetMinutes * 60000
     }
 
     function DispatchBoard({ sessionId, t }) {
@@ -248,12 +278,13 @@ window.__ModuleLoader__.load({
                       style: {
                         marginLeft: 'auto',
                         flexShrink: 0,
-                        color: 'var(--dsw-alias-label-secondary)',
+                        color: overBudget(entry)
+                          ? 'var(--dsw-alias-state-error-primary)'
+                          : 'var(--dsw-alias-label-secondary)',
                         fontVariantNumeric: 'tabular-nums',
                       },
                     },
-                    `#${entry.id} · ${statusLabel(t, entry.status)}` +
-                      (entry.status === 'running' ? ` · ${duration(Date.now() - entry.createdAt)}` : ''),
+                    entryMeta(t, entry),
                   ),
                 ),
                 Array.isArray(entry.writeScopes) && entry.writeScopes.length > 0
@@ -261,6 +292,29 @@ window.__ModuleLoader__.load({
                       'div',
                       { style: { color: 'var(--dsw-alias-label-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
                       `${t('board.scope')}: ${entry.writeScopes.join(', ')}`,
+                    )
+                  : null,
+                entry.progress && entry.progress.lastText
+                  ? h(
+                      'div',
+                      {
+                        style: {
+                          color: 'var(--dsw-alias-label-secondary)',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        },
+                        title: entry.progress.lastText,
+                      },
+                      entry.progress.lastText,
+                    )
+                  : null,
+                entry.verification
+                  ? h(
+                      'div',
+                      { style: { color: 'var(--dsw-alias-label-secondary)' } },
+                      `${t('board.verification')}: ${entry.verification}` +
+                        (typeof entry.budgetMinutes === 'number' ? ` · ${t('board.budget')}: ${entry.budgetMinutes}m` : ''),
                     )
                   : null,
                 entry.summary

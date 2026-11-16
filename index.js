@@ -1,10 +1,10 @@
 /**
  * Host half of the dispatcher bundle.
  *
- * Owns the durable dispatch board (including write-scope leases and restart
- * reconciliation) and serves it to the Web client over an authenticated
- * same-origin route. This module imports nothing but Node builtins, so the
- * bundle has no runtime dependency to install.
+ * Owns the durable dispatch board (write-scope leases, restart reconciliation,
+ * live per-worker progress) and serves it to the Web client over an
+ * authenticated same-origin route. This module imports nothing but Node
+ * builtins, so the bundle has no runtime dependency to install.
  */
 import fs from 'node:fs'
 import os from 'node:os'
@@ -15,6 +15,7 @@ export const inject = ['connection', 'agents']
 
 const BOARD_VERSION = 1
 const MAX_ENTRIES_PER_SESSION = 200
+const LAST_TEXT_LIMIT = 240
 const ROUTE_PATH = '/api/dispatcher.board'
 
 /** @returns {string} the DeepSeek Harness home directory. */
@@ -101,13 +102,35 @@ function summarizeResult(result) {
   return combined.length > 1200 ? `${combined.slice(0, 1200)}…` : combined
 }
 
+/** Extract a short assistant text snippet from a message content array. */
+function snippetOf(content) {
+  const blocks = Array.isArray(content) ? content : []
+  const text = blocks
+    .filter((block) => block && block.type === 'text' && typeof block.text === 'string')
+    .map((block) => block.text)
+    .join(' ')
+    .replace(/\s+/gu, ' ')
+    .trim()
+  return text.length > LAST_TEXT_LIMIT ? `${text.slice(0, LAST_TEXT_LIMIT)}…` : text
+}
+
+/** @returns {'quick'|'full'} */
+function workerVerification(value) {
+  return value === 'full' ? 'full' : 'quick'
+}
+
 /**
- * Durable board per dispatcher session.
+ * Durable board per dispatcher session, plus process-local worker progress.
  * @param {string} file
  */
 function createBoard(file) {
   const state = loadState(file)
   const persist = () => saveState(file, state)
+
+  /** @type {Map<string, Record<string, unknown>>} child session id -> runtime progress */
+  const progressByChild = new Map()
+  /** @type {Map<string, {sessionId: string, entryId: string}>} child session id -> owning entry */
+  const childIndex = new Map()
 
   /** @param {string} sessionId */
   function sessionEntries(sessionId) {
@@ -133,6 +156,28 @@ function createBoard(file) {
     return sessionEntries(sessionId).find((entry) => entry.id === id)
   }
 
+  function indexChild(sessionId, entry) {
+    if (typeof entry.childId === 'string' && entry.childId.length > 0) {
+      childIndex.set(entry.childId, { sessionId, entryId: entry.id })
+    }
+  }
+
+  function dropChild(childId) {
+    if (typeof childId !== 'string' || childId.length === 0) return
+    childIndex.delete(childId)
+    progressByChild.delete(childId)
+  }
+
+  /** Attach live progress to a detached entry view. */
+  function withProgress(entry) {
+    const copy = clone(entry)
+    if (typeof entry.childId === 'string' && entry.childId.length > 0) {
+      const progress = progressByChild.get(entry.childId)
+      if (progress !== undefined) copy.progress = clone(progress)
+    }
+    return copy
+  }
+
   function trim(entries) {
     if (entries.length <= MAX_ENTRIES_PER_SESSION) return
     entries.splice(0, entries.length - MAX_ENTRIES_PER_SESSION)
@@ -140,7 +185,7 @@ function createBoard(file) {
 
   return {
     /**
-     * @param {{sessionId: string, title: string, brief: string, writeScopes?: string[], cwd?: string, workspace?: string}} input
+     * @param {{sessionId: string, title: string, brief: string, writeScopes?: string[], cwd?: string, workspace?: string, verification?: string, budgetMinutes?: number, resumedFrom?: string}} input
      */
     async create(input) {
       const entries = sessionEntries(input.sessionId)
@@ -156,6 +201,9 @@ function createBoard(file) {
         writeScopes,
         workspace: normalizeWorkspace(input.workspace),
         cwd: typeof input.cwd === 'string' ? input.cwd : '',
+        verification: workerVerification(input.verification),
+        budgetMinutes: typeof input.budgetMinutes === 'number' ? input.budgetMinutes : null,
+        resumedFrom: typeof input.resumedFrom === 'string' ? input.resumedFrom : '',
         childId: '',
         status: 'pending',
         createdAt: now,
@@ -181,8 +229,10 @@ function createBoard(file) {
       entry.status = 'running'
       entry.childId = childId
       entry.startedAt = Date.now()
+      indexChild(sessionId, entry)
+      progressByChild.set(childId, { toolCalls: 0, lastActivityAt: entry.startedAt })
       persist()
-      return clone(entry)
+      return withProgress(entry)
     },
 
     /**
@@ -198,6 +248,7 @@ function createBoard(file) {
       entry.stopReason = stopReason
       entry.summary = summarizeResult(result)
       entry.endedAt = Date.now()
+      dropChild(entry.childId)
       persist()
       return clone(entry)
     },
@@ -214,6 +265,7 @@ function createBoard(file) {
       entry.stopReason = 'error'
       entry.summary = message
       entry.endedAt = Date.now()
+      dropChild(entry.childId)
       persist()
       return clone(entry)
     },
@@ -221,17 +273,19 @@ function createBoard(file) {
     /** @param {string} sessionId @param {string} id */
     entry(sessionId, id) {
       const found = findEntry(sessionId, id)
-      return found === undefined ? undefined : clone(found)
+      return found === undefined ? undefined : withProgress(found)
     },
 
     /** @param {string} sessionId */
     list(sessionId) {
-      return clone([...sessionEntries(sessionId)].reverse())
+      return [...sessionEntries(sessionId)].reverse().map(withProgress)
     },
 
     /** Active (pending or running) entries of one session. */
     active(sessionId) {
-      return clone(sessionEntries(sessionId).filter((entry) => entry.status === 'pending' || entry.status === 'running'))
+      return sessionEntries(sessionId)
+        .filter((entry) => entry.status === 'pending' || entry.status === 'running')
+        .map(withProgress)
     },
 
     /**
@@ -245,6 +299,7 @@ function createBoard(file) {
       if (wanted.length === 0 || workspaceKey.length === 0) return []
       const conflicts = []
       for (const [sessionId, entries] of Object.entries(state.sessions)) {
+        if (!Array.isArray(entries)) continue
         for (const entry of entries) {
           if (entry.status !== 'pending' && entry.status !== 'running') continue
           if (normalizeWorkspace(entry.workspace) !== workspaceKey) continue
@@ -286,7 +341,10 @@ function createBoard(file) {
             } catch {
               live = false
             }
-            if (live) continue
+            if (live) {
+              indexChild(entry.sessionId, entry)
+              continue
+            }
           }
           entry.status = 'unknown'
           entry.stopReason = 'host-restarted'
@@ -298,14 +356,49 @@ function createBoard(file) {
       if (changed) persist()
     },
 
+    /**
+     * Fold one durable session event of a worker session into its live progress.
+     * @param {string} sessionId the emitting (child) session id
+     * @param {{type?: string, data?: Record<string, unknown>}} event
+     */
+    observeChildEvent(sessionId, event) {
+      const childId = String(sessionId)
+      if (!childIndex.has(childId)) return
+      const now = Date.now()
+      let progress = progressByChild.get(childId)
+      if (progress === undefined) {
+        progress = { toolCalls: 0 }
+        progressByChild.set(childId, progress)
+      }
+      progress.lastActivityAt = now
+      const type = typeof event?.type === 'string' ? event.type : ''
+      const data = event?.data && typeof event.data === 'object' ? event.data : {}
+      if (type === 'turn/start' || type === 'turn/end') {
+        if (typeof data.turn === 'number') progress.turn = data.turn
+      } else if (type === 'step/start') {
+        if (typeof data.turn === 'number') progress.turn = data.turn
+        if (typeof data.step === 'number') progress.step = data.step
+      } else if (type === 'tool/call') {
+        if (typeof data.name === 'string') {
+          progress.lastTool = data.name
+          progress.lastToolAt = now
+        }
+        progress.toolCalls = (typeof progress.toolCalls === 'number' ? progress.toolCalls : 0) + 1
+      } else if (type === 'assistant/message') {
+        const message = data.message && typeof data.message === 'object' ? data.message : {}
+        const snippet = snippetOf(message.content)
+        if (snippet.length > 0) progress.lastText = snippet
+      }
+    },
+
     /** @param {string} sessionId */
     view(sessionId) {
-      const entries = [...sessionEntries(sessionId)].reverse()
+      const entries = [...sessionEntries(sessionId)].reverse().map(withProgress)
       const counts = { total: entries.length, pending: 0, running: 0, done: 0, failed: 0, stopped: 0, unknown: 0 }
       for (const entry of entries) {
         if (Object.hasOwn(counts, entry.status)) counts[entry.status] += 1
       }
-      return { sessionId, entries: clone(entries), counts }
+      return { sessionId, entries, counts }
     },
   }
 }
@@ -322,6 +415,15 @@ export function apply(ctx) {
   const board = createBoard(file)
   board.reconcile((childId) => ctx.agents.get(childId) !== undefined)
   ctx.provide('dispatcherBoard', board)
+  ctx.effect(() =>
+    ctx.on('session/event', (session, event) => {
+      try {
+        board.observeChildEvent(String(session.id), event)
+      } catch (error) {
+        ctx.logger?.warn?.(`[dispatcher] progress update failed: ${error?.message ?? error}`)
+      }
+    }),
+  )
   ctx.effect(() =>
     ctx.connection.fetch.register({
       path: ROUTE_PATH,
