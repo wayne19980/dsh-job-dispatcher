@@ -22,6 +22,7 @@ window.__ModuleLoader__.load({
       'board.failed': '失败',
       'board.stopped': '已停止',
       'board.pending': '排队中',
+      'board.unknown': '状态未知',
       'board.scope': '写域',
       'board.worker': 'worker',
       'board.empty': '暂无调度',
@@ -30,6 +31,7 @@ window.__ModuleLoader__.load({
       'status.failed': '失败',
       'status.stopped': '已停止',
       'status.pending': '排队中',
+      'status.unknown': '状态未知',
     }
     const en = {
       'board.title': 'Dispatches',
@@ -40,6 +42,7 @@ window.__ModuleLoader__.load({
       'board.failed': 'failed',
       'board.stopped': 'stopped',
       'board.pending': 'queued',
+      'board.unknown': 'unknown',
       'board.scope': 'scope',
       'board.worker': 'worker',
       'board.empty': 'No dispatches yet',
@@ -48,6 +51,7 @@ window.__ModuleLoader__.load({
       'status.failed': 'Failed',
       'status.stopped': 'Stopped',
       'status.pending': 'Queued',
+      'status.unknown': 'Unknown',
     }
 
     const STATUS_COLOR = {
@@ -56,6 +60,7 @@ window.__ModuleLoader__.load({
       failed: 'var(--dsw-alias-state-error-primary)',
       stopped: 'var(--dsw-alias-state-warn-primary)',
       pending: 'var(--dsw-alias-state-idle-primary)',
+      unknown: 'var(--dsw-alias-state-idle-primary)',
     }
 
     function statusLabel(t, status) {
@@ -105,7 +110,7 @@ window.__ModuleLoader__.load({
       const entries = board.entries
       if (!board.ready || entries.length === 0) return null
 
-      const counts = board.counts || { running: 0, done: 0, failed: 0, stopped: 0, pending: 0, total: entries.length }
+      const counts = board.counts || { running: 0, done: 0, failed: 0, stopped: 0, pending: 0, unknown: 0, total: entries.length }
       const badge = (label, value, color) =>
         h(
           'span',
@@ -178,6 +183,7 @@ window.__ModuleLoader__.load({
             counts.failed > 0 && badge(t('board.failed'), counts.failed, STATUS_COLOR.failed),
             counts.stopped > 0 && badge(t('board.stopped'), counts.stopped, STATUS_COLOR.stopped),
             counts.pending > 0 && badge(t('board.pending'), counts.pending, STATUS_COLOR.pending),
+            counts.unknown > 0 && badge(t('board.unknown'), counts.unknown, STATUS_COLOR.unknown),
           ),
           h('span', { style: { flexShrink: 0, color: 'var(--dsw-alias-label-secondary)' } }, open ? t('board.collapse') : t('board.expand')),
         ),

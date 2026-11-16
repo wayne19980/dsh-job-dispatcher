@@ -2,6 +2,8 @@
 
 > 一个只负责调度、不亲自执行的主对话预设 + 后台派发工具 + 实时 Web 调度看板，用于 DeepSeek Harness（DSH）Web profile。
 
+当前版本：**1.1.0**（可寻址控制 + 写租约 + 重启对账）
+
 主对话自己干活会阻塞你：一条需求没做完，下一条只能排队。调度台把「收件」和「执行」拆开——主对话只做「理解 → 派发 → 回执」，实现和验证交给后台 worker，完成后由 worker 的通知唤醒主对话汇报。
 
 适用于任何需要在同一个对话里连续提交多个独立任务、又不想排队等待的场景。
@@ -11,6 +13,8 @@
 - **主对话只读**：预设里没有 `write` / `edit` / `bash`，结构上不可能自己陷进长任务；
 - **`dispatch` 工具**：派发后台 worker 并立即返回回执，worker 固定使用完整能力的 `standard` 预设；
 - **`dispatcher_board` 工具**：主对话可随时列出当前调度看板；
+- **可寻址/可纠偏**：`dispatch_update` / `dispatch_stop` / `dispatch_workers`，按 dispatch id 直接给运行中 worker 发消息、停当前 turn、查看运行列表；不依赖会被 Agent Teams per-Agent 注册覆盖的 `send_message` / `interrupt_agent`；
+- **写租约**：`write_scopes` 不再只是提示，同 workspace 内与 pending/running 任务重叠会在派发时被拒绝（`allow_overlap: true` 可显式绕过）；
 - **实时调度看板**：Web 端输入框上方显示每个任务的状态、写域、worker 与结果摘要（2s 轮询）；
 - **增量安装**：不改变默认预设、不依赖 Agent Teams 或第三方插件，可随时卸载。
 
@@ -65,19 +69,34 @@ dsh plugin --profile web add file:/abs/path/dsh-job-dispatcher-1.0.0.tgz
 
 预期：主对话秒回 `已派发 d1 → ...` 并结束本轮；输入框上方出现「调度看板」；worker 完成后主对话汇报结果、看板变为 done。
 
+## 运行中调度管理
+
+```text
+dispatch_workers()                               # 看谁还在跑（dispatch id + worker id + 耗时 + 写域）
+dispatch_update("d19", "前置断言已删，改成 ...")  # 纠偏：在 worker 的下一个 step 边界生效
+dispatch_stop("d19")                            # 停当前 turn（保留 inbox 与 worker 会话）
+dispatch_update("d19", "按新要求继续")           # 之后可再唤醒它继续
+```
+
+- 消息在 step 边界生效，**不会打断**正在执行的长工具调用（巡演、截图、长命令）；要硬停用 `dispatch_stop`，但已开始的工具调用按 cancel signal 尽力中止。
+- 为什么不用 `send_message` / `interrupt_agent`：在启用 Agent Teams 的 profile 里，它们由团队插件按 teammate 名字注册在 agent 作用域，会盖掉 subagent 版本，对 dispatch worker 报 `active teammate not found`。
+- 兄弟 worker 之间没有消息通道；跨 worker 的前提变化需要由调度台用 `dispatch_update` relay。
+
 ## 工作原理
 
 - `dispatch` 调用 `ctx.subagents.startActivation({ provider: 'spawn', delivery: 'parent', request: { agentPreset: 'standard', maxDepth: 2 } })`，立即返回任务 id 与 worker 会话 id；
 - worker 完成通知作为本会话的新一轮输入唤醒主对话；同时 `activation.result` 把结果写进看板；
 - 看板由 Host 路由 `GET /api/dispatcher.board?session=<id>` 提供，数据落在 `~/.dsh/storages/dispatcher/board.json`；
-- 看板 UI 注册在 `conversation.input.dock` 插槽，只在该会话有任务时显示，普通会话不受影响。
+- 看板 UI 注册在 `conversation.input.dock` 插槽，只在该会话有任务时显示，普通会话不受影响；
+- `dispatch` 在派发前按 workspace + `write_scopes` 前缀做写租约检查；Host 启动时把 worker 已不存在的 pending/running 条目对账为 `unknown`。
 
 ## 已知限制
 
 - 只对**新会话**生效（已有会话的 preset 在创建时固定）；
 - 不要在调度台里使用 `spawn_teammate` / `subagent_fork`：它们没有 preset 选择，fresh teammate 会继承父会话的只读预设；persona 已明文禁用；
 - worker 的 approval 策略继承为 `never`：工作区内读写/命令可以跑，需要人工批准的操作会被自动拒绝；
-- Host 重启后，残留的 running 条目不会自动收尾（v1 未做重启对账）；
+- Host 重启时会把 worker 已不存在的 pending/running 条目对账为 `unknown`（保留条目，不删除历史）；
+- `dispatch_update` 的消息在 worker 的下一个 step 边界生效，不打断正在跑的工具调用；`dispatch_stop` 只停当前 turn，之后可用 `dispatch_update` 续跑。
 - 修改并重新安装后，替换已安装包的 JS 需要重启 Host 才能加载新模块（client 半可热替换）。
 
 ## 卸载
