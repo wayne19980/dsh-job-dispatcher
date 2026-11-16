@@ -11,12 +11,14 @@ import os from 'node:os'
 import path from 'node:path'
 
 export const name = 'dispatcher-host'
-export const inject = ['connection', 'agents']
+export const inject = ['connection', 'agents', 'tools']
 
 const BOARD_VERSION = 1
 const MAX_ENTRIES_PER_SESSION = 200
 const LAST_TEXT_LIMIT = 240
 const ROUTE_PATH = '/api/dispatcher.board'
+/** Tools that would let a dispatched worker start more agents. */
+const NESTING_TOOLS = new Set(['spawn_teammate', 'subagent', 'subagent_fork', 'workflow'])
 
 /** @returns {string} the DeepSeek Harness home directory. */
 function dshHome() {
@@ -131,6 +133,30 @@ function createBoard(file) {
   const progressByChild = new Map()
   /** @type {Map<string, {sessionId: string, entryId: string}>} child session id -> owning entry */
   const childIndex = new Map()
+  /** @type {Set<string>} every dispatch worker session id ever recorded, for the nesting guard */
+  const workerIds = new Set()
+
+  // Drop empty session buckets left behind by earlier board polls and index the
+  // workers that were already recorded in the persisted board.
+  for (const [sessionId, entries] of Object.entries(state.sessions)) {
+    if (!Array.isArray(entries) || entries.length === 0) {
+      delete state.sessions[sessionId]
+      continue
+    }
+    for (const entry of entries) {
+      if (typeof entry.childId === 'string' && entry.childId.length > 0) workerIds.add(entry.childId)
+    }
+  }
+
+  /**
+   * Read entries without materializing a session bucket. Read paths (board
+   * route, tool listings) must never grow `state.sessions`.
+   * @param {string} sessionId
+   */
+  function readEntries(sessionId) {
+    const entries = state.sessions[sessionId]
+    return Array.isArray(entries) ? entries : []
+  }
 
   /** @param {string} sessionId */
   function sessionEntries(sessionId) {
@@ -153,7 +179,7 @@ function createBoard(file) {
   }
 
   function findEntry(sessionId, id) {
-    return sessionEntries(sessionId).find((entry) => entry.id === id)
+    return readEntries(sessionId).find((entry) => entry.id === id)
   }
 
   function indexChild(sessionId, entry) {
@@ -230,6 +256,7 @@ function createBoard(file) {
       entry.childId = childId
       entry.startedAt = Date.now()
       indexChild(sessionId, entry)
+      workerIds.add(childId)
       progressByChild.set(childId, { toolCalls: 0, lastActivityAt: entry.startedAt })
       persist()
       return withProgress(entry)
@@ -276,14 +303,19 @@ function createBoard(file) {
       return found === undefined ? undefined : withProgress(found)
     },
 
+    /** Whether this session id is a dispatched worker (nesting must be denied). */
+    isDispatchWorker(sessionId) {
+      return workerIds.has(String(sessionId))
+    },
+
     /** @param {string} sessionId */
     list(sessionId) {
-      return [...sessionEntries(sessionId)].reverse().map(withProgress)
+      return [...readEntries(sessionId)].reverse().map(withProgress)
     },
 
     /** Active (pending or running) entries of one session. */
     active(sessionId) {
-      return sessionEntries(sessionId)
+      return readEntries(sessionId)
         .filter((entry) => entry.status === 'pending' || entry.status === 'running')
         .map(withProgress)
     },
@@ -393,7 +425,7 @@ function createBoard(file) {
 
     /** @param {string} sessionId */
     view(sessionId) {
-      const entries = [...sessionEntries(sessionId)].reverse().map(withProgress)
+      const entries = [...readEntries(sessionId)].reverse().map(withProgress)
       const counts = { total: entries.length, pending: 0, running: 0, done: 0, failed: 0, stopped: 0, unknown: 0 }
       for (const entry of entries) {
         if (Object.hasOwn(counts, entry.status)) counts[entry.status] += 1
@@ -415,6 +447,16 @@ export function apply(ctx) {
   const board = createBoard(file)
   board.reconcile((childId) => ctx.agents.get(childId) !== undefined)
   ctx.provide('dispatcherBoard', board)
+  ctx.effect(() =>
+    ctx.tools.guard((exec) => {
+      const agent = exec?.agent
+      if (!agent) return undefined
+      if (!NESTING_TOOLS.has(exec.name)) return undefined
+      return board.isDispatchWorker(String(agent.id))
+        ? 'dispatched workers cannot delegate further (nested delegation is disabled for dispatch workers)'
+        : undefined
+    }),
+  )
   ctx.effect(() =>
     ctx.on('session/event', (session, event) => {
       try {

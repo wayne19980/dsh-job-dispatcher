@@ -2,7 +2,7 @@
 
 > 一个只负责调度、不亲自执行的主对话预设 + 后台派发工具 + 实时 Web 调度看板，用于 DeepSeek Harness（DSH）Web profile。
 
-当前版本：**1.2.0**（可寻址控制 + 写租约 + 重启对账 + 实时进度 + 验收分级/预算 + 断点续跑）
+当前版本：**1.3.0**（lean worker 预设 + 禁嵌套 + 可寻址控制 + 写租约 + 重启对账 + 实时进度 + 验收分级/预算 + 断点续跑）
 
 主对话自己干活会阻塞你：一条需求没做完，下一条只能排队。调度台把「收件」和「执行」拆开——主对话只做「理解 → 派发 → 回执」，实现和验证交给后台 worker，完成后由 worker 的通知唤醒主对话汇报。
 
@@ -11,7 +11,8 @@
 ## 特性
 
 - **主对话只读**：预设里没有 `write` / `edit` / `bash`，结构上不可能自己陷进长任务；
-- **`dispatch` 工具**：派发后台 worker 并立即返回回执，worker 固定使用完整能力的 `standard` 预设；
+- **`dispatch` 工具**：派发后台 worker 并立即返回回执，worker 使用专用的 lean `dispatcher-worker` 预设（只保留执行/验证工具，不提供再派发能力）；
+- **禁嵌套**：Host 侧 tool guard 会拒绝 dispatch worker 的 `spawn_teammate` / `subagent` / `subagent_fork` / `workflow` 调用，避免 worker 再 fan-out 放大 token 成本；
 - **`dispatcher_board` 工具**：主对话可随时列出当前调度看板；
 - **可寻址/可纠偏**：`dispatch_update` / `dispatch_stop` / `dispatch_workers`，按 dispatch id 直接给运行中 worker 发消息、停当前 turn、查看运行列表；不依赖会被 Agent Teams per-Agent 注册覆盖的 `send_message` / `interrupt_agent`；
 - **写租约**：`write_scopes` 不再只是提示，同 workspace 内与 pending/running 任务重叠会在派发时被拒绝（`allow_overlap: true` 可显式绕过）；
@@ -107,10 +108,10 @@ dispatch("继续上次的改动", resume_of: "d28")   # 自动把 d28 的结果�
 
 ## 工作原理
 
-- `dispatch` 调用 `ctx.subagents.startActivation({ provider: 'spawn', delivery: 'parent', request: { agentPreset: 'standard', maxDepth: 2 } })`，立即返回任务 id 与 worker 会话 id；
+- `dispatch` 调用 `ctx.subagents.startActivation({ provider: 'spawn', delivery: 'parent', request: { agentPreset: 'dispatcher-worker', maxDepth: 2 } })`，立即返回任务 id 与 worker 会话 id；worker 预设只含执行/验证工具，Host 还会用 tool guard 拒绝其嵌套派发工具；
 - worker 完成通知作为本会话的新一轮输入唤醒主对话；同时 `activation.result` 把结果写进看板；
 - 看板由 Host 路由 `GET /api/dispatcher.board?session=<id>` 提供，数据落在 `~/.dsh/storages/dispatcher/board.json`；
-- 看板 UI 注册在 `conversation.input.dock` 插槽，只在该会话有任务时显示，普通会话不受影响；
+- 看板 UI 注册在 `conversation.input.dock` 插槽，只在该会话有任务时显示，普通会话不受影响；读接口不会为访问过的会话创建空 session；
 - `dispatch` 在派发前按 workspace + `write_scopes` 前缀做写租约检查；Host 启动时把 worker 已不存在的 pending/running 条目对账为 `unknown`；
 - Host 监听 worker 会话的 `session/event`，把 step、最近工具、最近活动时间与工具调用数写进内存进度（不落 board.json），`dispatch_workers` 与看板实时显示。
 
@@ -122,6 +123,8 @@ dispatch("继续上次的改动", resume_of: "d28")   # 自动把 d28 的结果�
 - Host 重启时会把 worker 已不存在的 pending/running 条目对账为 `unknown`（保留条目，不删除历史）；
 - `dispatch_update` 的消息在 worker 的下一个 step 边界生效，不打断正在跑的工具调用；`dispatch_stop` 只停当前 turn，之后可用 `dispatch_update` 续跑。
 - `verification: quick` 与 `budget_minutes` 是给 worker 的强提示，不是硬超时；需要立即停止仍用 `dispatch_stop`。
+- worker 的 compaction 阈值目前仍是默认值（模型窗口的 ~0.8），尚未做成本 A/B；lean 预设只收窄了工具面与 pruner，长 worker 的 cacheRead 仍是主要成本。
+- 禁嵌套 guard 会 deny worker 的 `spawn_teammate` / `subagent` / `subagent_fork` / `workflow`；如果某个 profile 没有这些工具，guard 自然不生效。它依赖 Host 的 `tools` 服务与 board 记录的 worker id。
 - 修改并重新安装后，替换已安装包的 JS 需要重启 Host 才能加载新模块（client 半可热替换）。
 
 ## 卸载

@@ -15,8 +15,8 @@
 export const name = 'dispatcher-tools'
 export const inject = ['tools', 'subagents', 'dispatcherBoard']
 
-/** Workers always run the full standard preset, never this read-only one. */
-const WORKER_PRESET = 'standard'
+/** Workers run a lean worker preset: execution/verification tools only, no delegation. */
+const WORKER_PRESET = 'dispatcher-worker'
 /** Allow a dispatcher that is itself a child session to still start a worker. */
 const WORKER_MAX_DEPTH = 2
 /** Verification level used when the caller omits it. */
@@ -247,7 +247,7 @@ export function apply(ctx) {
       ctx.tools.register({
         name: 'dispatch',
         description:
-          'Delegate one self-contained task to a background worker and return immediately. The worker runs in its own session with the full standard toolset and reports its final answer back into this conversation when it finishes. Use this for every implementation, investigation or verification request instead of doing the work here. Write `brief` as a complete work order (goal, exact scope, acceptance criteria and verification commands, constraints, report format); the dispatcher appends the verification/budget section and any resume handoff. `write_scopes` is enforced as a write lease: a dispatch that overlaps a pending/running dispatch in the same workspace is rejected unless `allow_overlap` is true. `verification` defaults to quick; set full only when the task really needs the complete acceptance procedure. `resume_of` continues an earlier dispatch from its summary. Several dispatches with disjoint scopes may be issued in one response; they run in parallel.',
+          'Delegate one self-contained task to a background worker and return immediately. The worker runs in its own session with a lean worker preset (execution/verification tools only; it cannot delegate further) and reports its final answer back into this conversation when it finishes. Use this for every implementation, investigation or verification request instead of doing the work here. Write `brief` as a complete work order (goal, exact scope, acceptance criteria and verification commands, constraints, report format); the dispatcher appends the verification/budget section and any resume handoff. `write_scopes` is enforced as a write lease: a dispatch that overlaps a pending/running dispatch in the same workspace is rejected unless `allow_overlap` is true. `verification` defaults to quick; set full only when the task really needs the complete acceptance procedure. `resume_of` continues an earlier dispatch from its summary. Several dispatches with disjoint scopes may be issued in one response; they run in parallel.',
         parameters: dispatchParameters,
         output: dispatchOutput,
         isConcurrencySafe: () => true,

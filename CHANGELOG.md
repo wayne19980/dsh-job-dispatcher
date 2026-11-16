@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.0 (2026-11-16)
+
+- 精简 worker 预设 `dispatcher-worker`：dispatch 出来的 worker 现在使用专用预设，只保留执行/验证必需工具（bash/pwsh、read/write/edit、glob/grep、jobs、todo、compaction），去掉 delegation、workflow、plan、goal、schedule、skill、web、ask-user 等工具；tool-result pruner 收紧到 4096/2048/512，AGENTS.md 上限 16384 bytes。
+- 禁嵌套：Host 插件注册 tool guard，对 dispatch worker 的 `spawn_teammate` / `subagent` / `subagent_fork` / `workflow` 调用直接 deny（`dsh-workflow-ptc` 的 `startChild` 不传 maxDepth，workflow 是此前可绕过深度的真实路径）。
+- 修复看板读路径会在每次轮询时给访问过的会话创建空数组的问题：`board.json` 不再积累空 session；启动时顺带清理已有的空 session。
+- worker 的 compaction 阈值暂未调整（仍为默认），等 A/B 实验后再定；本轮只做工具面收窄与禁嵌套。
+
 ## 1.2.0 (2026-11-16)
 
 - 结构化进度：Host 监听子会话的 `session/event`（step、tool/call、assistant/message、turn），在 `dispatch_workers`、`dispatcher_board` 与 Web 看板上显示当前 step、最近工具、最近活动时间与工具调用次数；进度是进程内状态，不写入 board.json。

@@ -84,3 +84,66 @@
                   thresholdChars: 8192
                   headChars: 4096
                   tailChars: 1024
+
+    # Lean worker preset used by dispatch. It deliberately has no delegation,
+    # workflow, plan, goal, schedule, skill or web tools: a dispatched worker
+    # must execute one brief and report, not fan out further agents.
+    - id: preset-dispatcher-worker
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: dispatcher-worker
+        name: 调度 Worker（内部）
+        description: 调度台派发的后台 worker 预设；只含执行/验证必需工具，不提供再派发能力。
+        order: 99
+        plugins:
+          - id: persona
+            name: '@deepseek-ai/dsh-persona'
+            config:
+              prefix: |
+                你是调度台派发出来的后台 worker：只执行 brief 里的事，不要扩展到无关范围，也不要把工作再委派给其它 agent（本预设没有派发工具）。
+
+                ## 工作方式
+                - brief 是唯一任务说明；动手前先确认目标、范围、验收标准和预算。
+                - 遵守 brief 末尾的「验收与预算」段：quick 只做类型检查/构建 + 与改动直接相关的最小检查；full 才跑完整验收。超预算时停止扩展工作，先交已完成代码。
+                - 结束时按固定格式回报：改了什么（文件/行）、做了哪些验证与结果、剩余项、风险与假设。验证失败要如实说明，不要谎报。
+                - 需要更多上下文时读仓库文件与 AGENTS.md；不要假设你能看到派发者看不到的对话。
+                - 不修改任务范围外的文件；发现范围外问题只写进回报，不要顺手处理。
+          - id: agent-instructions
+            name: '@deepseek-ai/dsh-agent-instructions'
+            config:
+              maxBytes: 16384
+          - id: time-context
+            name: '@deepseek-ai/dsh-time-context'
+          - id: tool-bash
+            name: '@deepseek-ai/dsh-tool-bash'
+            disabled: !!js process.platform === 'win32'
+          - id: tool-pwsh
+            name: '@deepseek-ai/dsh-tool-pwsh'
+            disabled: !!js process.platform !== 'win32'
+          - id: tool-fs
+            name: '@deepseek-ai/dsh-tool-fs'
+          - id: tool-fs-search
+            name: '@deepseek-ai/dsh-tool-fs-search'
+            config:
+              sampleOverCapGlobResults: false
+          - id: tool-jobs
+            name: '@deepseek-ai/dsh-tool-jobs'
+          - id: tool-todo
+            name: '@deepseek-ai/dsh-tool-todo'
+            config:
+              allowParallelInProgress: true
+          - id: compaction
+            name: cordis:group
+            group: true
+            isolate:
+              compaction: true
+              toolResultPruner: true
+            config:
+              - id: compaction-basic
+                name: '@deepseek-ai/dsh-compaction-basic'
+              - id: tool-result-pruner
+                name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
+                config:
+                  thresholdChars: 4096
+                  headChars: 2048
+                  tailChars: 512
